@@ -124,7 +124,7 @@ def is_extra_eu_partner(code, label):
     """
     Identify Extra-EU aggregates.
 
-    These are retained in the partner list even though their labels
+    Extra-EU aggregates are retained even though their labels
     contain EU-related wording.
     """
 
@@ -147,7 +147,7 @@ def is_eu_related_partner(code, label):
     code_upper = str(code).upper()
     label_upper = str(label).upper()
 
-    # Explicitly retain Extra-EU27 aggregates
+    # Retain Extra-EU27 aggregates
     if is_extra_eu_partner(code, label):
         return False
 
@@ -180,9 +180,6 @@ def is_eu_related_partner(code, label):
 def get_metadata():
     """
     Download dataset metadata.
-
-    A single reporter is specified to keep the metadata response
-    reasonably small while retaining the dataset dimensions.
     """
 
     response = requests.get(
@@ -215,6 +212,7 @@ def get_options(data, dimension):
     options = {}
 
     for code, _ in ordered_categories:
+
         label = labels.get(code, code)
 
         if (
@@ -233,8 +231,7 @@ def get_default_selection(dimension, options):
     """
     Choose a sensible default for each filter.
 
-    The user may still select multiple options in every multiselect,
-    including multiple STK_FLOW values.
+    All filters use multiselect, including STK_FLOW.
     """
 
     if not options:
@@ -287,9 +284,6 @@ def get_default_selection(dimension, options):
 
     if dimension == "stk_flow":
 
-        # Prefer Credit / Exports as the initial selection.
-        # Because this is a multiselect, the user can add Debit
-        # and Balance at the same time.
         preferred_flow_codes = [
             "CRE",
             "EXP",
@@ -367,11 +361,10 @@ def decode_eurostat_response(data):
     observations = data.get("value", {})
     rows = []
 
-    # Prepare reverse category mappings once instead of repeatedly
-    # searching through the category dictionaries.
     reverse_category_maps = {}
 
     for dimension in dimensions:
+
         category_index = (
             data["dimension"][dimension]["category"]["index"]
         )
@@ -384,17 +377,19 @@ def decode_eurostat_response(data):
     for observation_index, value in observations.items():
 
         observation_index = int(observation_index)
+
         coordinates = {}
         remainder = observation_index
 
-        # Decode the flattened JSON-stat observation index
         for dimension, size in reversed(
             list(zip(dimensions, dimension_sizes))
         ):
             coordinates[dimension] = remainder % size
             remainder //= size
 
-        row = {"value": value}
+        row = {
+            "value": value
+        }
 
         for dimension in dimensions:
 
@@ -408,7 +403,10 @@ def decode_eurostat_response(data):
                 dimension_position
             )
 
-            label = category.get("label", {}).get(code, code)
+            label = category.get("label", {}).get(
+                code,
+                code
+            )
 
             row[dimension] = code
             row[f"{dimension}_label"] = label
@@ -451,7 +449,10 @@ def prepare_display_df(df):
         )
     ]
 
-    columns_to_keep = label_columns + ["time", "value"]
+    columns_to_keep = label_columns + [
+        "time",
+        "value"
+    ]
 
     columns_to_keep = [
         column
@@ -474,8 +475,6 @@ def prepare_display_df(df):
         }
     )
 
-    # Prevent duplicate columns if both legacy and current flow labels
-    # are ever present.
     display_df = display_df.loc[
         :,
         ~display_df.columns.duplicated()
@@ -520,6 +519,25 @@ def prepare_display_df(df):
     ]
 
     return display_df
+
+
+def get_flow_sort_value(flow):
+    """
+    Assign a stable order to the main Eurostat flow labels.
+    """
+
+    flow_upper = str(flow).upper()
+
+    if "CREDIT" in flow_upper or "EXPORT" in flow_upper:
+        return 1
+
+    if "DEBIT" in flow_upper or "IMPORT" in flow_upper:
+        return 2
+
+    if "BALANCE" in flow_upper:
+        return 3
+
+    return 99
 
 
 # ------------------------------------------------------------
@@ -626,7 +644,9 @@ with st.sidebar:
     )
 
     if not available_years:
-        st.error("No years were found in the Eurostat metadata.")
+        st.error(
+            "No years were found in the Eurostat metadata."
+        )
         st.stop()
 
     earliest_year = min(available_years)
@@ -670,6 +690,7 @@ st.write(
 if download_clicked:
 
     try:
+
         with st.spinner("Downloading from Eurostat..."):
 
             response = requests.get(
@@ -683,6 +704,7 @@ if download_clicked:
             data = response.json()
 
     except requests.exceptions.Timeout:
+
         st.error(
             "The Eurostat request timed out. Try selecting fewer "
             "partners, service items, flows or years."
@@ -690,6 +712,7 @@ if download_clicked:
         st.stop()
 
     except requests.exceptions.HTTPError:
+
         st.error(
             f"Eurostat returned HTTP error "
             f"{response.status_code}."
@@ -703,6 +726,7 @@ if download_clicked:
         st.stop()
 
     except requests.exceptions.RequestException as error:
+
         st.error(
             "A connection error occurred while contacting Eurostat. "
             f"Details: {error}"
@@ -710,22 +734,26 @@ if download_clicked:
         st.stop()
 
     except ValueError:
+
         st.error(
             "Eurostat did not return a valid JSON response."
         )
         st.stop()
 
     if "value" not in data or not data["value"]:
+
         st.warning(
             "No observations were returned for the selected filters."
         )
         st.stop()
 
     try:
+
         df = decode_eurostat_response(data)
         display_df = prepare_display_df(df)
 
     except (KeyError, ValueError, TypeError) as error:
+
         st.error(
             "The Eurostat response could not be decoded. "
             f"Details: {error}"
@@ -733,6 +761,7 @@ if download_clicked:
         st.stop()
 
     if display_df.empty:
+
         st.warning(
             "The selected filters returned no usable observations."
         )
@@ -749,6 +778,7 @@ if download_clicked:
     metric_columns = st.columns(3)
 
     with metric_columns[0]:
+
         st.metric(
             "Observations",
             f"{len(display_df):,}"
@@ -812,25 +842,29 @@ if download_clicked:
 
             trend_df = display_df.copy()
 
+            # Ensure that the chart always has a Flow column
+            if "Flow" not in trend_df.columns:
+                trend_df["Flow"] = "Total"
+
+            # Flow is not included in Component.
+            # It will be displayed as separate side-by-side columns.
             component_dimensions = []
 
             if (
                 "Service item" in trend_df.columns
                 and trend_df["Service item"].nunique() > 1
             ):
-                component_dimensions.append("Service item")
-
-            if (
-                "Flow" in trend_df.columns
-                and trend_df["Flow"].nunique() > 1
-            ):
-                component_dimensions.append("Flow")
+                component_dimensions.append(
+                    "Service item"
+                )
 
             if (
                 "Unit" in trend_df.columns
                 and trend_df["Unit"].nunique() > 1
             ):
-                component_dimensions.append("Unit")
+                component_dimensions.append(
+                    "Unit"
+                )
 
             if component_dimensions:
 
@@ -842,6 +876,7 @@ if download_clicked:
                 )
 
             else:
+
                 trend_df["Component"] = "Total"
 
             trend_df = (
@@ -850,6 +885,7 @@ if download_clicked:
                     [
                         "Year",
                         "Partner",
+                        "Flow",
                         "Component"
                     ],
                     as_index=False,
@@ -858,9 +894,67 @@ if download_clicked:
                 .sum()
             )
 
-            partner_order = sorted(
-                trend_df["Partner"].dropna().unique()
+            # Sort years chronologically
+            year_order = sorted(
+                trend_df["Year"]
+                .dropna()
+                .unique(),
+                key=lambda value: int(value)
+                if str(value).isdigit()
+                else str(value)
             )
+
+            partner_order = sorted(
+                trend_df["Partner"]
+                .dropna()
+                .unique()
+            )
+
+            available_flows = list(
+                trend_df["Flow"]
+                .dropna()
+                .unique()
+            )
+
+            flow_order = sorted(
+                available_flows,
+                key=lambda flow: (
+                    get_flow_sort_value(flow),
+                    str(flow)
+                )
+            )
+
+            # Create a unique side-by-side column for every
+            # partner and flow combination.
+            trend_df["Column group"] = (
+                trend_df["Partner"].astype(str)
+                + " | "
+                + trend_df["Flow"].astype(str)
+            )
+
+            column_group_order = []
+
+            for partner in partner_order:
+
+                for flow in flow_order:
+
+                    combination_exists = (
+                        (
+                            trend_df["Partner"] == partner
+                        )
+                        & (
+                            trend_df["Flow"] == flow
+                        )
+                    ).any()
+
+                    if combination_exists:
+                        column_group_order.append(
+                            f"{partner} | {flow}"
+                        )
+
+            # ------------------------------------------------
+            # BARS
+            # ------------------------------------------------
 
             base_chart = (
                 alt.Chart(trend_df)
@@ -869,13 +963,15 @@ if download_clicked:
                     x=alt.X(
                         "Year:N",
                         title="Year",
-                        sort=sorted(
-                            trend_df["Year"].unique()
+                        sort=year_order,
+                        axis=alt.Axis(
+                            labelAngle=0
                         )
                     ),
                     xOffset=alt.XOffset(
-                        "Partner:N",
-                        sort=partner_order
+                        "Column group:N",
+                        sort=column_group_order,
+                        title=None
                     ),
                     y=alt.Y(
                         "Value:Q",
@@ -884,7 +980,7 @@ if download_clicked:
                     ),
                     color=alt.Color(
                         "Component:N",
-                        title="Component"
+                        title="Service component"
                     ),
                     tooltip=[
                         alt.Tooltip(
@@ -894,6 +990,10 @@ if download_clicked:
                         alt.Tooltip(
                             "Partner:N",
                             title="Partner"
+                        ),
+                        alt.Tooltip(
+                            "Flow:N",
+                            title="Flow"
                         ),
                         alt.Tooltip(
                             "Component:N",
@@ -908,77 +1008,92 @@ if download_clicked:
                 )
             )
 
-            # Display partner names above the bars whenever more
-            # than one partner is selected.
-            if selected_partner_count > 1:
+            # ------------------------------------------------
+            # LABELS ABOVE THE COLUMNS
+            # ------------------------------------------------
 
-                label_df = (
-                    trend_df
-                    .groupby(
-                        ["Year", "Partner"],
-                        as_index=False
-                    )["Value"]
-                    .sum()
-                )
+            label_df = (
+                trend_df
+                .groupby(
+                    [
+                        "Year",
+                        "Partner",
+                        "Flow",
+                        "Column group"
+                    ],
+                    as_index=False,
+                    dropna=False
+                )["Value"]
+                .sum()
+            )
 
-                label_chart = (
-                    alt.Chart(label_df)
-                    .mark_text(
-                        align="center",
-                        baseline="bottom",
-                        dy=-4,
-                        fontSize=10
-                    )
-                    .encode(
-                        x=alt.X(
-                            "Year:N",
-                            sort=sorted(
-                                trend_df["Year"].unique()
-                            )
-                        ),
-                        xOffset=alt.XOffset(
-                            "Partner:N",
-                            sort=partner_order
-                        ),
-                        y=alt.Y(
-                            "Value:Q",
-                            stack=None
-                        ),
-                        text=alt.Text(
-                            "Partner:N"
-                        ),
-                        tooltip=[
-                            alt.Tooltip(
-                                "Year:N",
-                                title="Year"
-                            ),
-                            alt.Tooltip(
-                                "Partner:N",
-                                title="Partner"
-                            ),
-                            alt.Tooltip(
-                                "Value:Q",
-                                title="Total",
-                                format=",.1f"
-                            )
-                        ]
-                    )
-                )
+            if selected_partner_count == 1:
 
-                trend_chart = (
-                    base_chart
-                    + label_chart
-                ).properties(
-                    height=500
+                # With one partner, only show the flow name
+                label_df["Column label"] = (
+                    label_df["Flow"].astype(str)
                 )
 
             else:
 
-                trend_chart = base_chart.properties(
-                    height=500
+                # With several partners, show both partner and flow
+                label_df["Column label"] = (
+                    label_df["Partner"].astype(str)
+                    + " | "
+                    + label_df["Flow"].astype(str)
                 )
 
-            trend_chart = trend_chart.configure_view(
+            label_chart = (
+                alt.Chart(label_df)
+                .mark_text(
+                    align="center",
+                    baseline="bottom",
+                    dy=-4,
+                    fontSize=10
+                )
+                .encode(
+                    x=alt.X(
+                        "Year:N",
+                        sort=year_order
+                    ),
+                    xOffset=alt.XOffset(
+                        "Column group:N",
+                        sort=column_group_order
+                    ),
+                    y=alt.Y(
+                        "Value:Q",
+                        stack=None
+                    ),
+                    text=alt.Text(
+                        "Column label:N"
+                    ),
+                    tooltip=[
+                        alt.Tooltip(
+                            "Year:N",
+                            title="Year"
+                        ),
+                        alt.Tooltip(
+                            "Partner:N",
+                            title="Partner"
+                        ),
+                        alt.Tooltip(
+                            "Flow:N",
+                            title="Flow"
+                        ),
+                        alt.Tooltip(
+                            "Value:Q",
+                            title="Total",
+                            format=",.1f"
+                        )
+                    ]
+                )
+            )
+
+            trend_chart = (
+                base_chart + label_chart
+            ).properties(
+                height=500
+            ).configure_view(
                 strokeWidth=0
             )
 
