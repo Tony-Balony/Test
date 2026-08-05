@@ -780,213 +780,271 @@ if download_clicked:
             number_of_flows
         )
 
-    # --------------------------------------------------------
-    # TREND CHART
-    # --------------------------------------------------------
+   # --------------------------------------------------------
+# TREND CHART
+# --------------------------------------------------------
 
-    required_chart_columns = {
-        "Year",
-        "Partner",
-        "Value"
-    }
+required_chart_columns = {
+    "Year",
+    "Partner",
+    "Value"
+}
 
-    if required_chart_columns.issubset(
-        display_df.columns
-    ):
+if required_chart_columns.issubset(display_df.columns):
 
-        selected_partner_count = (
-            display_df["Partner"].nunique()
+    selected_partner_count = display_df["Partner"].nunique()
+
+    if selected_partner_count > 5:
+
+        st.warning(
+            "Trend over time is hidden because "
+            f"{selected_partner_count} partners are selected. "
+            "Select five or fewer partners to show the chart."
         )
 
-        if selected_partner_count > 5:
+    else:
 
-            st.warning(
-                "Trend over time is hidden because "
-                f"{selected_partner_count} partners are selected. "
-                "Select five or fewer partners to show the chart."
+        st.subheader("Trend over time")
+
+        trend_df = display_df.copy()
+
+        # Ensure that a Flow column always exists
+        if "Flow" not in trend_df.columns:
+            trend_df["Flow"] = "Total"
+
+        # Service items may still be stacked inside each flow column
+        component_dimensions = []
+
+        if (
+            "Service item" in trend_df.columns
+            and trend_df["Service item"].nunique() > 1
+        ):
+            component_dimensions.append("Service item")
+
+        if (
+            "Unit" in trend_df.columns
+            and trend_df["Unit"].nunique() > 1
+        ):
+            component_dimensions.append("Unit")
+
+        if component_dimensions:
+
+            trend_df["Component"] = (
+                trend_df[component_dimensions]
+                .fillna("")
+                .astype(str)
+                .agg(" | ".join, axis=1)
             )
 
         else:
+            trend_df["Component"] = "Total"
 
-            st.subheader("Trend over time")
+        trend_df = (
+            trend_df
+            .groupby(
+                [
+                    "Year",
+                    "Partner",
+                    "Flow",
+                    "Component"
+                ],
+                as_index=False,
+                dropna=False
+            )["Value"]
+            .sum()
+        )
 
-            trend_df = display_df.copy()
+        year_order = sorted(
+            trend_df["Year"].dropna().unique()
+        )
 
-            component_dimensions = []
+        partner_order = sorted(
+            trend_df["Partner"].dropna().unique()
+        )
 
+        preferred_flow_order = [
+            "Credit",
+            "Exports",
+            "Debit",
+            "Imports",
+            "Balance"
+        ]
+
+        available_flows = list(
+            trend_df["Flow"].dropna().unique()
+        )
+
+        flow_order = [
+            flow
+            for flow in preferred_flow_order
+            if flow in available_flows
+        ]
+
+        flow_order += [
+            flow
+            for flow in available_flows
+            if flow not in flow_order
+        ]
+
+        # Combine partner and flow so every year can show:
+        # Partner 1 Credit, Debit, Balance
+        # Partner 2 Credit, Debit, Balance, etc.
+        trend_df["Column group"] = (
+            trend_df["Partner"].astype(str)
+            + " | "
+            + trend_df["Flow"].astype(str)
+        )
+
+        column_group_order = [
+            f"{partner} | {flow}"
+            for partner in partner_order
+            for flow in flow_order
             if (
-                "Service item" in trend_df.columns
-                and trend_df["Service item"].nunique() > 1
-            ):
-                component_dimensions.append("Service item")
-
-            if (
-                "Flow" in trend_df.columns
-                and trend_df["Flow"].nunique() > 1
-            ):
-                component_dimensions.append("Flow")
-
-            if (
-                "Unit" in trend_df.columns
-                and trend_df["Unit"].nunique() > 1
-            ):
-                component_dimensions.append("Unit")
-
-            if component_dimensions:
-
-                trend_df["Component"] = (
-                    trend_df[component_dimensions]
-                    .fillna("")
-                    .astype(str)
-                    .agg(" | ".join, axis=1)
+                (
+                    trend_df["Partner"] == partner
                 )
+                & (
+                    trend_df["Flow"] == flow
+                )
+            ).any()
+        ]
 
-            else:
-                trend_df["Component"] = "Total"
-
-            trend_df = (
-                trend_df
-                .groupby(
-                    [
-                        "Year",
-                        "Partner",
-                        "Component"
-                    ],
-                    as_index=False,
-                    dropna=False
-                )["Value"]
-                .sum()
-            )
-
-            partner_order = sorted(
-                trend_df["Partner"].dropna().unique()
-            )
-
-            base_chart = (
-                alt.Chart(trend_df)
-                .mark_bar()
-                .encode(
-                    x=alt.X(
+        base_chart = (
+            alt.Chart(trend_df)
+            .mark_bar()
+            .encode(
+                x=alt.X(
+                    "Year:N",
+                    title="Year",
+                    sort=year_order,
+                    axis=alt.Axis(
+                        labelAngle=0
+                    )
+                ),
+                xOffset=alt.XOffset(
+                    "Column group:N",
+                    sort=column_group_order,
+                    title=None
+                ),
+                y=alt.Y(
+                    "Value:Q",
+                    title="Trade value",
+                    stack="zero"
+                ),
+                color=alt.Color(
+                    "Component:N",
+                    title="Service component"
+                ),
+                tooltip=[
+                    alt.Tooltip(
                         "Year:N",
-                        title="Year",
-                        sort=sorted(
-                            trend_df["Year"].unique()
-                        )
+                        title="Year"
                     ),
-                    xOffset=alt.XOffset(
+                    alt.Tooltip(
                         "Partner:N",
-                        sort=partner_order
+                        title="Partner"
                     ),
-                    y=alt.Y(
-                        "Value:Q",
-                        title="Trade value",
-                        stack="zero"
+                    alt.Tooltip(
+                        "Flow:N",
+                        title="Flow"
                     ),
-                    color=alt.Color(
+                    alt.Tooltip(
                         "Component:N",
                         title="Component"
                     ),
-                    tooltip=[
-                        alt.Tooltip(
-                            "Year:N",
-                            title="Year"
-                        ),
-                        alt.Tooltip(
-                            "Partner:N",
-                            title="Partner"
-                        ),
-                        alt.Tooltip(
-                            "Component:N",
-                            title="Component"
-                        ),
-                        alt.Tooltip(
-                            "Value:Q",
-                            title="Value",
-                            format=",.1f"
-                        )
-                    ]
-                )
-            )
-
-            # Display partner names above the bars whenever more
-            # than one partner is selected.
-            if selected_partner_count > 1:
-
-                label_df = (
-                    trend_df
-                    .groupby(
-                        ["Year", "Partner"],
-                        as_index=False
-                    )["Value"]
-                    .sum()
-                )
-
-                label_chart = (
-                    alt.Chart(label_df)
-                    .mark_text(
-                        align="center",
-                        baseline="bottom",
-                        dy=-4,
-                        fontSize=10
+                    alt.Tooltip(
+                        "Value:Q",
+                        title="Value",
+                        format=",.1f"
                     )
-                    .encode(
-                        x=alt.X(
-                            "Year:N",
-                            sort=sorted(
-                                trend_df["Year"].unique()
-                            )
-                        ),
-                        xOffset=alt.XOffset(
-                            "Partner:N",
-                            sort=partner_order
-                        ),
-                        y=alt.Y(
-                            "Value:Q",
-                            stack=None
-                        ),
-                        text=alt.Text(
-                            "Partner:N"
-                        ),
-                        tooltip=[
-                            alt.Tooltip(
-                                "Year:N",
-                                title="Year"
-                            ),
-                            alt.Tooltip(
-                                "Partner:N",
-                                title="Partner"
-                            ),
-                            alt.Tooltip(
-                                "Value:Q",
-                                title="Total",
-                                format=",.1f"
-                            )
-                        ]
+                ]
+            )
+        )
+
+        # Add labels above each flow column
+        label_df = (
+            trend_df
+            .groupby(
+                [
+                    "Year",
+                    "Partner",
+                    "Flow",
+                    "Column group"
+                ],
+                as_index=False
+            )["Value"]
+            .sum()
+        )
+
+        # With one partner, show Credit / Debit / Balance.
+        # With multiple partners, show Partner | Flow.
+        if selected_partner_count == 1:
+            label_df["Column label"] = label_df["Flow"]
+        else:
+            label_df["Column label"] = (
+                label_df["Partner"].astype(str)
+                + " | "
+                + label_df["Flow"].astype(str)
+            )
+
+        label_chart = (
+            alt.Chart(label_df)
+            .mark_text(
+                align="center",
+                baseline="bottom",
+                dy=-4,
+                fontSize=10
+            )
+            .encode(
+                x=alt.X(
+                    "Year:N",
+                    sort=year_order
+                ),
+                xOffset=alt.XOffset(
+                    "Column group:N",
+                    sort=column_group_order
+                ),
+                y=alt.Y(
+                    "Value:Q",
+                    stack=None
+                ),
+                text=alt.Text(
+                    "Column label:N"
+                ),
+                tooltip=[
+                    alt.Tooltip(
+                        "Year:N",
+                        title="Year"
+                    ),
+                    alt.Tooltip(
+                        "Partner:N",
+                        title="Partner"
+                    ),
+                    alt.Tooltip(
+                        "Flow:N",
+                        title="Flow"
+                    ),
+                    alt.Tooltip(
+                        "Value:Q",
+                        title="Total",
+                        format=",.1f"
                     )
-                )
-
-                trend_chart = (
-                    base_chart
-                    + label_chart
-                ).properties(
-                    height=500
-                )
-
-            else:
-
-                trend_chart = base_chart.properties(
-                    height=500
-                )
-
-            trend_chart = trend_chart.configure_view(
-                strokeWidth=0
+                ]
             )
+        )
 
-            st.altair_chart(
-                trend_chart,
-                use_container_width=True
-            )
+        trend_chart = (
+            base_chart + label_chart
+        ).properties(
+            height=500
+        ).configure_view(
+            strokeWidth=0
+        )
 
+        st.altair_chart(
+            trend_chart,
+            use_container_width=True
+        )
     # --------------------------------------------------------
     # DATA TABLE
     # --------------------------------------------------------
