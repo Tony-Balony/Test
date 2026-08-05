@@ -3,12 +3,34 @@ import pandas as pd
 import requests
 import altair as alt
 
-st.set_page_config(page_title="Eurostat Trade in Services Explorer", layout="wide")
+
+# ------------------------------------------------------------
+# PAGE CONFIGURATION
+# ------------------------------------------------------------
+
+st.set_page_config(
+    page_title="Eurostat Trade in Services Explorer",
+    layout="wide"
+)
 
 st.title("Eurostat Trade in Services Explorer")
 
+
+# ------------------------------------------------------------
+# EUROSTAT DATASET
+# ------------------------------------------------------------
+
 DATASET = "bop_its6_det"
-BASE_URL = f"https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/{DATASET}"
+
+BASE_URL = (
+    "https://ec.europa.eu/eurostat/api/dissemination/"
+    f"statistics/1.0/data/{DATASET}"
+)
+
+
+# ------------------------------------------------------------
+# REPORTERS
+# ------------------------------------------------------------
 
 reporters = {
     "EU27": "EU27_2020",
@@ -41,7 +63,19 @@ reporters = {
     "Sweden": "SE"
 }
 
-reporter_options = ["EU27"] + sorted([x for x in reporters if x != "EU27"])
+reporter_options = (
+    ["EU27"]
+    + sorted(
+        reporter
+        for reporter in reporters
+        if reporter != "EU27"
+    )
+)
+
+
+# ------------------------------------------------------------
+# PARTNER FILTERING
+# ------------------------------------------------------------
 
 EU_MEMBER_CODES = {
     "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR",
@@ -86,14 +120,14 @@ EU_RELATED_LABEL_PARTS = [
 ]
 
 
-@st.cache_data
-def get_metadata():
-    r = requests.get(BASE_URL, params={"geo": "DK"})
-    r.raise_for_status()
-    return r.json()
-
-
 def is_extra_eu_partner(code, label):
+    """
+    Identify Extra-EU aggregates.
+
+    These are retained in the partner list even though their labels
+    contain EU-related wording.
+    """
+
     code_upper = str(code).upper()
     label_upper = str(label).upper()
 
@@ -106,52 +140,118 @@ def is_extra_eu_partner(code, label):
 
 
 def is_eu_related_partner(code, label):
+    """
+    Return True when a partner should be excluded from the partner list.
+    """
+
     code_upper = str(code).upper()
     label_upper = str(label).upper()
 
-    # Keep Extra-EU27 / rest-of-world aggregate
+    # Explicitly retain Extra-EU27 aggregates
     if is_extra_eu_partner(code, label):
         return False
 
+    # Exclude individual EU Member States
     if code_upper in EU_MEMBER_CODES:
         return True
 
-    if any(part in code_upper for part in EU_RELATED_CODE_PARTS):
+    # Exclude EU-related aggregate codes
+    if any(
+        code_part in code_upper
+        for code_part in EU_RELATED_CODE_PARTS
+    ):
         return True
 
-    if any(part in label_upper for part in EU_RELATED_LABEL_PARTS):
+    # Exclude EU-related labels
+    if any(
+        label_part in label_upper
+        for label_part in EU_RELATED_LABEL_PARTS
+    ):
         return True
 
     return False
 
 
-def get_options(data, dim):
-    cats = data["dimension"][dim]["category"]
-    labels = cats.get("label", {})
-    index = cats.get("index", {})
-    ordered = sorted(index.items(), key=lambda x: x[1])
+# ------------------------------------------------------------
+# EUROSTAT METADATA
+# ------------------------------------------------------------
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_metadata():
+    """
+    Download dataset metadata.
+
+    A single reporter is specified to keep the metadata response
+    reasonably small while retaining the dataset dimensions.
+    """
+
+    response = requests.get(
+        BASE_URL,
+        params={"geo": "DK"},
+        timeout=60
+    )
+
+    response.raise_for_status()
+
+    return response.json()
+
+
+def get_options(data, dimension):
+    """
+    Build a dictionary of display labels and Eurostat codes
+    for a dimension.
+    """
+
+    categories = data["dimension"][dimension]["category"]
+
+    labels = categories.get("label", {})
+    category_index = categories.get("index", {})
+
+    ordered_categories = sorted(
+        category_index.items(),
+        key=lambda item: item[1]
+    )
 
     options = {}
 
-    for code, _ in ordered:
+    for code, _ in ordered_categories:
         label = labels.get(code, code)
 
-        if dim == "partner" and is_eu_related_partner(code, label):
+        if (
+            dimension == "partner"
+            and is_eu_related_partner(code, label)
+        ):
             continue
 
-        options[f"{label} ({code})"] = code
+        display_label = f"{label} ({code})"
+        options[display_label] = code
 
     return options
 
 
-def get_default_selection(dim, options):
-    default_selection = list(options.keys())[:1]
+def get_default_selection(dimension, options):
+    """
+    Choose a sensible default for each filter.
 
-    if dim == "partner":
-        # Prefer Extra-EU27 as default
-        for label, code in options.items():
-            if is_extra_eu_partner(code, label):
-                return [label]
+    The user may still select multiple options in every multiselect,
+    including multiple STK_FLOW values.
+    """
+
+    if not options:
+        return []
+
+    default_selection = [next(iter(options))]
+
+    # --------------------------------------------------------
+    # Partner
+    # --------------------------------------------------------
+
+    if dimension == "partner":
+
+        # Prefer Extra-EU27
+        for display_label, code in options.items():
+            if is_extra_eu_partner(code, display_label):
+                return [display_label]
 
         preferred_partner_codes = [
             "US",
@@ -164,9 +264,9 @@ def get_default_selection(dim, options):
         ]
 
         for preferred_code in preferred_partner_codes:
-            for label, code in options.items():
+            for display_label, code in options.items():
                 if code == preferred_code:
-                    return [label]
+                    return [display_label]
 
         preferred_partner_labels = [
             "UNITED STATES",
@@ -177,34 +277,73 @@ def get_default_selection(dim, options):
         ]
 
         for preferred_label in preferred_partner_labels:
-            for label in options:
-                if preferred_label in label.upper():
-                    return [label]
+            for display_label in options:
+                if preferred_label in display_label.upper():
+                    return [display_label]
 
-    if dim == "stk_flow":
-    # Select exports/credits by default, while allowing multiple selections
-    for label, code in options.items():
-        if code in ["CRE", "EXP", "X", "C"]:
-            return [label]
+    # --------------------------------------------------------
+    # Stock flow
+    # --------------------------------------------------------
 
-    exports = [
-        label for label in options
-        if "EXPORT" in label.upper()
-        or "CREDIT" in label.upper()
-    ]
+    if dimension == "stk_flow":
 
-    if exports:
-        return [exports[0]]
+        # Prefer Credit / Exports as the initial selection.
+        # Because this is a multiselect, the user can add Debit
+        # and Balance at the same time.
+        preferred_flow_codes = [
+            "CRE",
+            "EXP",
+            "X",
+            "C"
+        ]
 
-    if dim == "bop_item":
-        for label, code in options.items():
-            if code in ["S", "SERV", "TOTAL"]:
-                return [label]
+        for preferred_code in preferred_flow_codes:
+            for display_label, code in options.items():
+                if code == preferred_code:
+                    return [display_label]
+
+        exports_or_credit = [
+            display_label
+            for display_label in options
+            if (
+                "EXPORT" in display_label.upper()
+                or "CREDIT" in display_label.upper()
+            )
+        ]
+
+        if exports_or_credit:
+            return [exports_or_credit[0]]
+
+    # --------------------------------------------------------
+    # Service item
+    # --------------------------------------------------------
+
+    if dimension == "bop_item":
+
+        preferred_service_codes = [
+            "S",
+            "SERV",
+            "TOTAL"
+        ]
+
+        for preferred_code in preferred_service_codes:
+            for display_label, code in options.items():
+                if code == preferred_code:
+                    return [display_label]
 
         total_services = [
-            label for label in options
-            if "TOTAL SERVICES" in label.upper()
-            or "SERVICES" == label.upper().split(" (")[0]
+            display_label
+            for display_label in options
+            if (
+                "TOTAL SERVICES" in display_label.upper()
+                or (
+                    display_label
+                    .upper()
+                    .split(" (")[0]
+                    .strip()
+                    == "SERVICES"
+                )
+            )
         ]
 
         if total_services:
@@ -213,35 +352,66 @@ def get_default_selection(dim, options):
     return default_selection
 
 
+# ------------------------------------------------------------
+# EUROSTAT RESPONSE DECODING
+# ------------------------------------------------------------
+
 def decode_eurostat_response(data):
+    """
+    Convert a Eurostat JSON-stat response to a pandas DataFrame.
+    """
+
     dimensions = data["id"]
-    sizes = data["size"]
+    dimension_sizes = data["size"]
+
+    observations = data.get("value", {})
     rows = []
 
-    for obs_index, value in data["value"].items():
-        obs_index = int(obs_index)
-        coords = {}
-        remainder = obs_index
+    # Prepare reverse category mappings once instead of repeatedly
+    # searching through the category dictionaries.
+    reverse_category_maps = {}
 
-        for dim, size in reversed(list(zip(dimensions, sizes))):
-            coords[dim] = remainder % size
-            remainder = remainder // size
+    for dimension in dimensions:
+        category_index = (
+            data["dimension"][dimension]["category"]["index"]
+        )
+
+        reverse_category_maps[dimension] = {
+            position: code
+            for code, position in category_index.items()
+        }
+
+    for observation_index, value in observations.items():
+
+        observation_index = int(observation_index)
+        coordinates = {}
+        remainder = observation_index
+
+        # Decode the flattened JSON-stat observation index
+        for dimension, size in reversed(
+            list(zip(dimensions, dimension_sizes))
+        ):
+            coordinates[dimension] = remainder % size
+            remainder //= size
 
         row = {"value": value}
 
-        for dim in dimensions:
-            dim_index = coords[dim]
-            cats = data["dimension"][dim]["category"]
+        for dimension in dimensions:
 
-            code = next(
-                k for k, v in cats["index"].items()
-                if v == dim_index
+            dimension_position = coordinates[dimension]
+
+            category = (
+                data["dimension"][dimension]["category"]
             )
 
-            label = cats.get("label", {}).get(code, code)
+            code = reverse_category_maps[dimension].get(
+                dimension_position
+            )
 
-            row[dim] = code
-            row[f"{dim}_label"] = label
+            label = category.get("label", {}).get(code, code)
+
+            row[dimension] = code
+            row[f"{dimension}_label"] = label
 
         rows.append(row)
 
@@ -249,6 +419,10 @@ def decode_eurostat_response(data):
 
 
 def prepare_display_df(df):
+    """
+    Create a readable table for display and CSV download.
+    """
+
     display_df = df.copy()
 
     ignore_columns = [
@@ -260,17 +434,30 @@ def prepare_display_df(df):
     ]
 
     display_df = display_df.drop(
-        columns=[col for col in ignore_columns if col in display_df.columns],
+        columns=[
+            column
+            for column in ignore_columns
+            if column in display_df.columns
+        ],
         errors="ignore"
     )
 
     label_columns = [
-        col for col in display_df.columns
-        if col.endswith("_label") and col not in ignore_columns
+        column
+        for column in display_df.columns
+        if (
+            column.endswith("_label")
+            and column not in ignore_columns
+        )
     ]
 
     columns_to_keep = label_columns + ["time", "value"]
-    columns_to_keep = [col for col in columns_to_keep if col in display_df.columns]
+
+    columns_to_keep = [
+        column
+        for column in columns_to_keep
+        if column in display_df.columns
+    ]
 
     display_df = display_df[columns_to_keep]
 
@@ -280,26 +467,89 @@ def prepare_display_df(df):
             "time": "Year",
             "partner_label": "Partner",
             "bop_item_label": "Service item",
+            "stk_flow_label": "Flow",
             "flow_label": "Flow",
             "unit_label": "Unit",
             "value": "Value"
         }
     )
 
-    display_df = display_df.loc[:, ~display_df.columns.duplicated()]
+    # Prevent duplicate columns if both legacy and current flow labels
+    # are ever present.
+    display_df = display_df.loc[
+        :,
+        ~display_df.columns.duplicated()
+    ]
 
     if "Year" in display_df.columns:
-        display_df["Year"] = display_df["Year"].astype(str)
+        display_df["Year"] = (
+            display_df["Year"]
+            .astype(str)
+        )
 
     if "Value" in display_df.columns:
-        display_df["Value"] = pd.to_numeric(display_df["Value"], errors="coerce")
+        display_df["Value"] = pd.to_numeric(
+            display_df["Value"],
+            errors="coerce"
+        )
+
+    preferred_column_order = [
+        "Reporter",
+        "Partner",
+        "Service item",
+        "Flow",
+        "Unit",
+        "Year",
+        "Value"
+    ]
+
+    ordered_columns = [
+        column
+        for column in preferred_column_order
+        if column in display_df.columns
+    ]
+
+    remaining_columns = [
+        column
+        for column in display_df.columns
+        if column not in ordered_columns
+    ]
+
+    display_df = display_df[
+        ordered_columns + remaining_columns
+    ]
 
     return display_df
 
 
-metadata = get_metadata()
+# ------------------------------------------------------------
+# METADATA LOADING
+# ------------------------------------------------------------
+
+try:
+    metadata = get_metadata()
+
+except requests.exceptions.RequestException as error:
+    st.error(
+        "Could not connect to the Eurostat API. "
+        f"Details: {error}"
+    )
+    st.stop()
+
+except (KeyError, ValueError) as error:
+    st.error(
+        "Eurostat returned an unexpected metadata response. "
+        f"Details: {error}"
+    )
+    st.stop()
+
+
+# ------------------------------------------------------------
+# SIDEBAR FILTERS
+# ------------------------------------------------------------
 
 with st.sidebar:
+
     st.header("Filters")
 
     reporter_name = st.selectbox(
@@ -310,55 +560,88 @@ with st.sidebar:
 
     reporter_code = reporters[reporter_name]
 
-    params = {"geo": reporter_code}
+    params = {
+        "geo": reporter_code
+    }
 
-    ignored_filter_dims = [
+    ignored_filter_dimensions = [
         "geo",
         "time",
         "freq",
         "currency"
     ]
 
-    for dim in metadata["id"]:
-        if dim in ignored_filter_dims:
+    filter_titles = {
+        "partner": "Partner",
+        "bop_item": "Service item",
+        "stk_flow": "Flow",
+        "unit": "Unit"
+    }
+
+    for dimension in metadata["id"]:
+
+        if dimension in ignored_filter_dimensions:
             continue
 
-        options = get_options(metadata, dim)
-        default_selection = get_default_selection(dim, options)
+        options = get_options(
+            metadata,
+            dimension
+        )
 
-        filter_titles = {
-            "partner": "Partner",
-            "bop_item": "Service item",
-            "stk_flow": "Flow",
-            "unit": "Unit"
-        }
+        if not options:
+            continue
+
+        default_selection = get_default_selection(
+            dimension,
+            options
+        )
 
         selected = st.multiselect(
-            filter_titles.get(dim, dim.replace("_", " ").title()),
+            label=filter_titles.get(
+                dimension,
+                dimension.replace("_", " ").title()
+            ),
             options=list(options.keys()),
             default=default_selection,
-            key=f"filter_{dim}"
+            key=f"filter_{dimension}"
         )
 
         if selected:
-            params[dim] = [options[x] for x in selected]
+            params[dimension] = [
+                options[selected_option]
+                for selected_option in selected
+            ]
+
+    # --------------------------------------------------------
+    # Years
+    # --------------------------------------------------------
 
     available_years = sorted(
-        [
-            int(year)
-            for year in metadata["dimension"]["time"]["category"]["index"].keys()
-            if str(year).isdigit()
-        ]
+        int(year)
+        for year in (
+            metadata["dimension"]["time"]["category"]["index"]
+            .keys()
+        )
+        if str(year).isdigit()
     )
 
+    if not available_years:
+        st.error("No years were found in the Eurostat metadata.")
+        st.stop()
+
+    earliest_year = min(available_years)
     latest_year = max(available_years)
-    start_year = max(min(available_years), latest_year - 5)
+
+    default_start_year = max(
+        earliest_year,
+        latest_year - 5
+    )
 
     year_range = st.slider(
         "Year range",
-        min_value=min(available_years),
+        min_value=earliest_year,
         max_value=latest_year,
-        value=(start_year, latest_year)
+        value=(default_start_year, latest_year)
     )
 
     params["time"] = [
@@ -367,54 +650,164 @@ with st.sidebar:
         if year_range[0] <= year <= year_range[1]
     ]
 
-    download_clicked = st.button("Download Data", type="primary")
+    download_clicked = st.button(
+        "Download Data",
+        type="primary",
+        use_container_width=True
+    )
 
 
-st.write(f"Selected reporter: **{reporter_name} ({reporter_code})**")
+# ------------------------------------------------------------
+# MAIN PAGE
+# ------------------------------------------------------------
+
+st.write(
+    f"Selected reporter: "
+    f"**{reporter_name} ({reporter_code})**"
+)
+
 
 if download_clicked:
 
-    with st.spinner("Downloading from Eurostat..."):
-        response = requests.get(BASE_URL, params=params)
+    try:
+        with st.spinner("Downloading from Eurostat..."):
 
-    if response.status_code != 200:
-        st.error(f"HTTP Error {response.status_code}")
+            response = requests.get(
+                BASE_URL,
+                params=params,
+                timeout=120
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+    except requests.exceptions.Timeout:
+        st.error(
+            "The Eurostat request timed out. Try selecting fewer "
+            "partners, service items, flows or years."
+        )
         st.stop()
 
-    data = response.json()
+    except requests.exceptions.HTTPError:
+        st.error(
+            f"Eurostat returned HTTP error "
+            f"{response.status_code}."
+        )
 
-    if "value" not in data:
-        st.warning("No observations returned.")
+        try:
+            st.code(response.text[:2000])
+        except Exception:
+            pass
+
         st.stop()
 
-    df = decode_eurostat_response(data)
-    display_df = prepare_display_df(df)
+    except requests.exceptions.RequestException as error:
+        st.error(
+            "A connection error occurred while contacting Eurostat. "
+            f"Details: {error}"
+        )
+        st.stop()
+
+    except ValueError:
+        st.error(
+            "Eurostat did not return a valid JSON response."
+        )
+        st.stop()
+
+    if "value" not in data or not data["value"]:
+        st.warning(
+            "No observations were returned for the selected filters."
+        )
+        st.stop()
+
+    try:
+        df = decode_eurostat_response(data)
+        display_df = prepare_display_df(df)
+
+    except (KeyError, ValueError, TypeError) as error:
+        st.error(
+            "The Eurostat response could not be decoded. "
+            f"Details: {error}"
+        )
+        st.stop()
+
+    if display_df.empty:
+        st.warning(
+            "The selected filters returned no usable observations."
+        )
+        st.stop()
 
     st.success("Download complete")
 
+    # --------------------------------------------------------
+    # OVERVIEW
+    # --------------------------------------------------------
+
     st.subheader("Overview")
 
-    col1, col2 = st.columns(2)
+    metric_columns = st.columns(3)
 
-    with col1:
-        st.metric("Observations", f"{len(display_df):,}")
+    with metric_columns[0]:
+        st.metric(
+            "Observations",
+            f"{len(display_df):,}"
+        )
 
-    with col2:
-        st.metric("Years", display_df["Year"].nunique())
+    with metric_columns[1]:
 
-    if (
-        "Year" in display_df.columns
-        and "Partner" in display_df.columns
-        and "Value" in display_df.columns
+        number_of_years = (
+            display_df["Year"].nunique()
+            if "Year" in display_df.columns
+            else 0
+        )
+
+        st.metric(
+            "Years",
+            number_of_years
+        )
+
+    with metric_columns[2]:
+
+        number_of_flows = (
+            display_df["Flow"].nunique()
+            if "Flow" in display_df.columns
+            else 0
+        )
+
+        st.metric(
+            "Flows",
+            number_of_flows
+        )
+
+    # --------------------------------------------------------
+    # TREND CHART
+    # --------------------------------------------------------
+
+    required_chart_columns = {
+        "Year",
+        "Partner",
+        "Value"
+    }
+
+    if required_chart_columns.issubset(
+        display_df.columns
     ):
-        selected_partner_count = display_df["Partner"].nunique()
+
+        selected_partner_count = (
+            display_df["Partner"].nunique()
+        )
 
         if selected_partner_count > 5:
+
             st.warning(
-                f"Trend over time chart is hidden because {selected_partner_count} partners are selected. "
-                "Select 5 or fewer partners to show the chart."
+                "Trend over time is hidden because "
+                f"{selected_partner_count} partners are selected. "
+                "Select five or fewer partners to show the chart."
             )
+
         else:
+
             st.subheader("Trend over time")
 
             trend_df = display_df.copy()
@@ -433,42 +826,98 @@ if download_clicked:
             ):
                 component_dimensions.append("Flow")
 
+            if (
+                "Unit" in trend_df.columns
+                and trend_df["Unit"].nunique() > 1
+            ):
+                component_dimensions.append("Unit")
+
             if component_dimensions:
+
                 trend_df["Component"] = (
                     trend_df[component_dimensions]
+                    .fillna("")
                     .astype(str)
                     .agg(" | ".join, axis=1)
                 )
+
             else:
                 trend_df["Component"] = "Total"
 
             trend_df = (
                 trend_df
-                .groupby(["Year", "Partner", "Component"], as_index=False)["Value"]
+                .groupby(
+                    [
+                        "Year",
+                        "Partner",
+                        "Component"
+                    ],
+                    as_index=False,
+                    dropna=False
+                )["Value"]
                 .sum()
+            )
+
+            partner_order = sorted(
+                trend_df["Partner"].dropna().unique()
             )
 
             base_chart = (
                 alt.Chart(trend_df)
                 .mark_bar()
                 .encode(
-                    x=alt.X("Year:N", title="Year"),
-                    xOffset=alt.XOffset("Partner:N"),
-                    y=alt.Y("Value:Q", title="Trade value", stack="zero"),
-                    color=alt.Color("Component:N", title="Component"),
+                    x=alt.X(
+                        "Year:N",
+                        title="Year",
+                        sort=sorted(
+                            trend_df["Year"].unique()
+                        )
+                    ),
+                    xOffset=alt.XOffset(
+                        "Partner:N",
+                        sort=partner_order
+                    ),
+                    y=alt.Y(
+                        "Value:Q",
+                        title="Trade value",
+                        stack="zero"
+                    ),
+                    color=alt.Color(
+                        "Component:N",
+                        title="Component"
+                    ),
                     tooltip=[
-                        alt.Tooltip("Year:N", title="Year"),
-                        alt.Tooltip("Partner:N", title="Partner"),
-                        alt.Tooltip("Component:N", title="Component"),
-                        alt.Tooltip("Value:Q", title="Value", format=",.0f")
+                        alt.Tooltip(
+                            "Year:N",
+                            title="Year"
+                        ),
+                        alt.Tooltip(
+                            "Partner:N",
+                            title="Partner"
+                        ),
+                        alt.Tooltip(
+                            "Component:N",
+                            title="Component"
+                        ),
+                        alt.Tooltip(
+                            "Value:Q",
+                            title="Value",
+                            format=",.1f"
+                        )
                     ]
                 )
             )
 
-            if trend_df["Partner"].nunique() > 1:
+            # Display partner names above the bars whenever more
+            # than one partner is selected.
+            if selected_partner_count > 1:
+
                 label_df = (
                     trend_df
-                    .groupby(["Year", "Partner"], as_index=False)["Value"]
+                    .groupby(
+                        ["Year", "Partner"],
+                        as_index=False
+                    )["Value"]
                     .sum()
                 )
 
@@ -478,21 +927,69 @@ if download_clicked:
                         align="center",
                         baseline="bottom",
                         dy=-4,
-                        fontSize=11
+                        fontSize=10
                     )
                     .encode(
-                        x=alt.X("Year:N", title="Year"),
-                        xOffset=alt.XOffset("Partner:N"),
-                        y=alt.Y("Value:Q", stack=None),
-                        text=alt.Text("Partner:N")
+                        x=alt.X(
+                            "Year:N",
+                            sort=sorted(
+                                trend_df["Year"].unique()
+                            )
+                        ),
+                        xOffset=alt.XOffset(
+                            "Partner:N",
+                            sort=partner_order
+                        ),
+                        y=alt.Y(
+                            "Value:Q",
+                            stack=None
+                        ),
+                        text=alt.Text(
+                            "Partner:N"
+                        ),
+                        tooltip=[
+                            alt.Tooltip(
+                                "Year:N",
+                                title="Year"
+                            ),
+                            alt.Tooltip(
+                                "Partner:N",
+                                title="Partner"
+                            ),
+                            alt.Tooltip(
+                                "Value:Q",
+                                title="Total",
+                                format=",.1f"
+                            )
+                        ]
                     )
                 )
 
-                trend_chart = (base_chart + label_chart).properties(height=500)
-            else:
-                trend_chart = base_chart.properties(height=500)
+                trend_chart = (
+                    base_chart
+                    + label_chart
+                ).properties(
+                    height=500
+                )
 
-            st.altair_chart(trend_chart, use_container_width=True)
+            else:
+
+                trend_chart = base_chart.properties(
+                    height=500
+                )
+
+            trend_chart = trend_chart.configure_view(
+                strokeWidth=0
+            )
+
+            st.altair_chart(
+                trend_chart,
+                use_container_width=True
+            )
+
+    # --------------------------------------------------------
+    # DATA TABLE
+    # --------------------------------------------------------
 
     st.subheader("Selected data")
 
@@ -502,14 +999,24 @@ if download_clicked:
         hide_index=True
     )
 
-    csv = display_df.to_csv(index=False)
+    # --------------------------------------------------------
+    # CSV DOWNLOAD
+    # --------------------------------------------------------
+
+    csv = display_df.to_csv(
+        index=False
+    ).encode("utf-8-sig")
 
     st.download_button(
-        "Download selected data as CSV",
-        csv,
-        f"{reporter_code}_{DATASET}.csv",
-        "text/csv"
+        label="Download selected data as CSV",
+        data=csv,
+        file_name=f"{reporter_code}_{DATASET}.csv",
+        mime="text/csv",
+        use_container_width=False
     )
 
 else:
-    st.info("Choose filters in the sidebar, then click Download Data.")
+
+    st.info(
+        "Choose filters in the sidebar, then click Download Data."
+    )
