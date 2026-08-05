@@ -181,19 +181,20 @@ def get_default_selection(dim, options):
                 if preferred_label in label.upper():
                     return [label]
 
-    if dim == "flow":
-        for label, code in options.items():
-            if code in ["EXP", "X", "C"]:
-                return [label]
+    if dim == "stk_flow":
+    # Select exports/credits by default, while allowing multiple selections
+    for label, code in options.items():
+        if code in ["CRE", "EXP", "X", "C"]:
+            return [label]
 
-        exports = [
-            label for label in options
-            if "EXPORT" in label.upper()
-            or "CREDIT" in label.upper()
-        ]
+    exports = [
+        label for label in options
+        if "EXPORT" in label.upper()
+        or "CREDIT" in label.upper()
+    ]
 
-        if exports:
-            return [exports[0]]
+    if exports:
+        return [exports[0]]
 
     if dim == "bop_item":
         for label, code in options.items():
@@ -325,10 +326,18 @@ with st.sidebar:
         options = get_options(metadata, dim)
         default_selection = get_default_selection(dim, options)
 
+        filter_titles = {
+            "partner": "Partner",
+            "bop_item": "Service item",
+            "stk_flow": "Flow",
+            "unit": "Unit"
+        }
+
         selected = st.multiselect(
-            dim,
-            list(options.keys()),
-            default=default_selection
+            filter_titles.get(dim, dim.replace("_", " ").title()),
+            options=list(options.keys()),
+            default=default_selection,
+            key=f"filter_{dim}"
         )
 
         if selected:
