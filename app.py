@@ -9,7 +9,7 @@ import altair as alt
 # ------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Eurostat Trade in Services Explorer",
+    page_title="Eurostat CrosBorder Trade in Services Explorer",
     layout="wide"
 )
 
